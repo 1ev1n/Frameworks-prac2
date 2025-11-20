@@ -55,16 +55,43 @@ async function runMigrations() {
   }
 }
 
-// Заглушка для маршрута
-app.get('/', (req, res) => {
-  res.send('Users Service is running');
+// Маршрут регистрации
+app.post('/v1/register', async (req, res) => {
+  const requestId = req.requestId;
+  try {
+    const { error, value } = registerSchema.validate(req.body);
+    if (error) {
+      logger.error({ requestId, error: error.details[0].message }, 'Validation error');
+      return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: error.details[0].message } });
+    }
+
+    const { email, password, name, roles } = value;
+
+    const existingUser = await db.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existingUser.rows.length > 0) {
+      logger.warn({ requestId, email }, 'User already exists');
+      return res.status(409).json({ success: false, error: { code: 'USER_EXISTS', message: 'User with this email already exists' } });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const id = uuidv4();
+    const createdAt = new Date();
+    const updatedAt = new Date();
+
+    const newUser = await db.query(
+      'INSERT INTO users (id, email, password_hash, name, roles, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, email, name, roles, created_at, updated_at',
+      [id, email, passwordHash, name, roles, createdAt, updatedAt]
+    );
+
+    logger.info({ requestId, userId: newUser.rows[0].id }, 'User registered successfully');
+    res.status(201).json({ success: true, data: { id: newUser.rows[0].id, email: newUser.rows[0].email, name: newUser.rows[0].name, roles: newUser.rows[0].roles, createdAt: newUser.rows[0].created_at, updatedAt: newUser.rows[0].updated_at } });
+  } catch (error) {
+    logger.error({ requestId, error: error.message }, 'Error during user registration');
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
+  }
 });
 
 // TODO: Реализовать остальные маршруты
-app.post('/v1/register', (req, res) => {
-  res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'Registration not implemented yet' } });
-});
-
 app.post('/v1/login', (req, res) => {
   res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'Login not implemented yet' } });
 });

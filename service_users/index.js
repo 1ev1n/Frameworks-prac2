@@ -6,6 +6,7 @@ const Joi = require('joi');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const db = require('./src/db'); // Подключаем наш модуль для работы с БД
+const { authenticateJWT, authorizeRoles } = require('./middleware/auth'); // Подключаем middleware для аутентификации и авторизации
 
 const app = express();
 const PORT = process.env.PORT || 3001; // Изменен порт для сервиса пользователей
@@ -37,6 +38,11 @@ const registerSchema = Joi.object({
 const loginSchema = Joi.object({
   email: Joi.string().email().required(),
   password: Joi.string().required(),
+});
+
+const profileUpdateSchema = Joi.object({
+  name: Joi.string().optional(),
+  roles: Joi.array().items(Joi.string().valid('user', 'admin')).optional(),
 });
 
 // Запуск миграций при старте сервиса
@@ -136,18 +142,111 @@ app.post('/v1/login', async (req, res) => {
   }
 });
 
-app.get('/v1/profile', (req, res) => {
-  res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'Profile retrieval not implemented yet' } });
+// Маршрут получения профиля
+app.get('/v1/profile', authenticateJWT, async (req, res) => {
+  const requestId = req.requestId;
+  try {
+    // req.user устанавливается middleware authenticateJWT
+    const userId = req.user.id;
+
+    const user = await db.query('SELECT id, email, name, roles, created_at, updated_at FROM users WHERE id = $1', [userId]);
+
+    if (user.rows.length === 0) {
+      logger.warn({ requestId, userId }, 'Profile not found for authenticated user');
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'User profile not found' } });
+    }
+
+    logger.info({ requestId, userId }, 'User profile retrieved successfully');
+    res.status(200).json({ success: true, data: user.rows[0] });
+  } catch (error) {
+    logger.error({ requestId, error: error.message }, 'Error retrieving user profile');
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
+  }
 });
 
-app.put('/v1/profile', (req, res) => {
-  res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'Profile update not implemented yet' } });
+// Маршрут обновления профиля
+app.put('/v1/profile', authenticateJWT, async (req, res) => {
+  const requestId = req.requestId;
+  try {
+    const { error, value } = profileUpdateSchema.validate(req.body);
+    if (error) {
+      logger.error({ requestId, error: error.details[0].message }, 'Validation error for profile update');
+      return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: error.details[0].message } });
+    }
+
+    const userId = req.user.id;
+    const { name, roles } = value;
+
+    const updateFields = [];
+    const updateValues = [];
+    let paramIndex = 1;
+
+    if (name !== undefined) {
+      updateFields.push(`name = $${paramIndex++}`);
+      updateValues.push(name);
+    }
+    if (roles !== undefined) {
+      // Только админ может менять роли другого пользователя, или пользователь может менять свои роли (если не является админом)
+      if (req.user.roles.includes('admin')) {
+        updateFields.push(`roles = $${paramIndex++}`);
+        updateValues.push(roles);
+      } else if (roles.some(role => !req.user.roles.includes(role))) {
+        // Если пользователь не админ и пытается добавить роль, которую у него нет, или удалить свою единственную роль
+        logger.warn({ requestId, userId, attemptedRoles: roles }, 'User tried to change roles without admin privileges');
+        return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Insufficient permissions to change roles' } });
+      }
+    }
+
+    if (updateFields.length === 0) {
+      return res.status(400).json({ success: false, error: { code: 'NO_CHANGES', message: 'No fields to update' } });
+    }
+
+    updateValues.push(new Date()); // updated_at
+    updateFields.push(`updated_at = $${paramIndex++}`);
+    updateValues.push(userId);
+
+    const updatedUser = await db.query(
+      `UPDATE users SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING id, email, name, roles, created_at, updated_at`,
+      updateValues
+    );
+
+    if (updatedUser.rows.length === 0) {
+      logger.warn({ requestId, userId }, 'User for profile update not found');
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'User not found' } });
+    }
+
+    logger.info({ requestId, userId }, 'User profile updated successfully');
+    res.status(200).json({ success: true, data: updatedUser.rows[0] });
+
+  } catch (error) {
+    logger.error({ requestId, error: error.message }, 'Error updating user profile');
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
+  }
 });
 
-app.get('/v1/users', (req, res) => {
-  res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'User list retrieval not implemented yet' } });
-});
+// Маршрут получения списка пользователей (только для админов)
+app.get('/v1/users', authenticateJWT, authorizeRoles(['admin']), async (req, res) => {
+  const requestId = req.requestId;
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
 
+    const users = await db.query(
+      'SELECT id, email, name, roles, created_at, updated_at FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2',
+      [limit, offset]
+    );
+
+    const totalUsers = await db.query('SELECT COUNT(*) FROM users');
+    const total = parseInt(totalUsers.rows[0].count);
+
+    logger.info({ requestId, page, limit, total }, 'Users list retrieved successfully');
+    res.status(200).json({ success: true, data: users.rows, pagination: { total, page, limit } });
+  } catch (error) {
+    logger.error({ requestId, error: error.message }, 'Error retrieving users list');
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
+  }
+});
 
 // Запуск сервера и миграций
 app.listen(PORT, '0.0.0.0', async () => {

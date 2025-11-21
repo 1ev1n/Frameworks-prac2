@@ -12,6 +12,13 @@ services:
     build: service_users
     environment:
       - NODE_ENV=production
+      - DB_HOST=db
+      - POSTGRES_DB=${POSTGRES_DB:-task_management_db}
+      - POSTGRES_USER=${POSTGRES_USER:-user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+      - JWT_SECRET=${JWT_SECRET:-supersecretjwtkey}
+    depends_on:
+      - db
     networks:
       - app-network
 
@@ -19,6 +26,13 @@ services:
     build: service_orders
     environment:
       - NODE_ENV=production
+      - DB_HOST=db
+      - POSTGRES_DB=${POSTGRES_DB:-task_management_db}
+      - POSTGRES_USER=${POSTGRES_USER:-user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+      - JWT_SECRET=${JWT_SECRET:-supersecretjwtkey}
+    depends_on:
+      - db
     networks:
       - app-network
 

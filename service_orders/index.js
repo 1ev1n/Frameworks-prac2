@@ -129,9 +129,48 @@ app.get('/v1/orders/:id', authenticateJWT, async (req, res) => {
   }
 });
 
+// Маршрут получения списка заказов с пагинацией и сортировкой
+app.get('/v1/orders', authenticateJWT, async (req, res) => {
+  const requestId = req.requestId;
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+    const sortBy = req.query.sortBy || 'created_at'; // По умолчанию сортируем по дате создания
+    const sortOrder = req.query.sortOrder === 'asc' ? 'ASC' : 'DESC';
 
-app.get('/v1/orders', (req, res) => {
-  res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'Order list retrieval not implemented yet' } });
+    const userId = req.headers['x-user-id'];
+    const userRoles = JSON.parse(req.headers['x-user-roles'] || '[]');
+
+    let query = 'SELECT id, user_id, items, status, total_amount, created_at, updated_at FROM orders';
+    let countQuery = 'SELECT COUNT(*) FROM orders';
+    const queryParams = [];
+    const countParams = [];
+    let paramIndex = 1;
+
+    // Если пользователь не администратор, то показываем только его заказы
+    if (!userRoles.includes('admin')) {
+      query += ` WHERE user_id = $${paramIndex}`; // Используем user_id из токена
+      countQuery += ` WHERE user_id = $${paramIndex}`; // Используем user_id из токена
+      queryParams.push(userId);
+      countParams.push(userId);
+      paramIndex++;
+    }
+
+    query += ` ORDER BY ${sortBy} ${sortOrder} LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
+    queryParams.push(limit, offset);
+
+    const orders = await db.query(query, queryParams);
+    const totalOrders = await db.query(countQuery, countParams);
+    const total = parseInt(totalOrders.rows[0].count);
+
+    logger.info({ requestId, page, limit, total, sortBy, sortOrder }, 'Orders list retrieved successfully');
+    res.status(200).json({ success: true, data: orders.rows, pagination: { total, page, limit, sortBy, sortOrder } });
+
+  } catch (error) {
+    logger.error({ requestId, error: error.message }, 'Error retrieving orders list');
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
+  }
 });
 
 app.put('/v1/orders/:id/status', (req, res) => {

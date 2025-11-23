@@ -1,96 +1,79 @@
 const express = require('express');
 const cors = require('cors');
+const pino = require('pino');
+const { v4: uuidv4 } = require('uuid');
+const Joi = require('joi');
+const db = require('./src/db'); // Подключаем наш модуль для работы с БД
 
 const app = express();
-const PORT = process.env.PORT || 8000;
+const PORT = process.env.PORT || 3002; // Изменен порт для сервиса заказов
 
-// Middleware
+const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
+
+// Middleware для добавления Request ID и логирования
+app.use((req, res, next) => {
+  const requestId = req.headers['x-request-id'] || uuidv4();
+  req.requestId = requestId;
+  res.setHeader('X-Request-ID', requestId);
+  logger.info({ requestId, method: req.method, url: req.url }, 'Incoming request');
+  next();
+});
+
+// CORS и JSON парсер
 app.use(cors());
 app.use(express.json());
 
-// Имитация базы данных в памяти (LocalStorage)
-let fakeOrdersDb = {};
-let currentId = 1;
+// Запуск миграций при старте сервиса
+async function runMigrations() {
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS orders (
+        id UUID PRIMARY KEY,
+        user_id UUID NOT NULL,
+        items JSONB NOT NULL,
+        status VARCHAR(50) DEFAULT 'created',
+        total_amount NUMERIC(10, 2) NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+    `);
+    logger.info('Миграции для таблицы orders успешно выполнены.');
+  } catch (error) {
+    logger.error({ error: error.message }, 'Ошибка при выполнении миграций для таблицы orders.');
+    process.exit(1); // Завершаем работу сервиса при ошибке миграции
+  }
+}
 
-// Routes
-app.get('/orders/status', (req, res) => {
-    res.json({status: 'Orders service is running'});
+// Заглушка для маршрута
+app.get('/', (req, res) => {
+  res.send('Orders Service is running');
 });
 
-app.get('/orders/health', (req, res) => {
-    res.json({
-        status: 'OK',
-        service: 'Orders Service',
-        timestamp: new Date().toISOString()
-    });
+// TODO: Реализовать остальные маршруты
+app.post('/v1/orders', (req, res) => {
+  res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'Order creation not implemented yet' } });
 });
 
-app.get('/orders/:orderId', (req, res) => {
-    const orderId = parseInt(req.params.orderId);
-    const order = fakeOrdersDb[orderId];
-
-    if (!order) {
-        return res.status(404).json({error: 'Order not found'});
-    }
-
-    res.json(order);
+app.get('/v1/orders/:id', (req, res) => {
+  res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'Order retrieval by ID not implemented yet' } });
 });
 
-app.get('/orders', (req, res) => {
-    let orders = Object.values(fakeOrdersDb);
-
-    // Добавляем фильтрацию по userId если передан параметр
-    if (req.query.userId) {
-        const userId = parseInt(req.query.userId);
-        orders = orders.filter(order => order.userId === userId);
-    }
-
-    res.json(orders);
+app.get('/v1/orders', (req, res) => {
+  res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'Order list retrieval not implemented yet' } });
 });
 
-app.post('/orders', (req, res) => {
-    const orderData = req.body;
-    const orderId = currentId++;
-
-    const newOrder = {
-        id: orderId,
-        ...orderData
-    };
-
-    fakeOrdersDb[orderId] = newOrder;
-    res.status(201).json(newOrder);
+app.put('/v1/orders/:id/status', (req, res) => {
+  res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'Order status update not implemented yet' } });
 });
 
-app.put('/orders/:orderId', (req, res) => {
-    const orderId = parseInt(req.params.orderId);
-    const orderData = req.body;
-
-    if (!fakeOrdersDb[orderId]) {
-        return res.status(404).json({error: 'Order not found'});
-    }
-
-    fakeOrdersDb[orderId] = {
-        id: orderId,
-        ...orderData
-    };
-
-    res.json(fakeOrdersDb[orderId]);
+app.delete('/v1/orders/:id', (req, res) => {
+  res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'Order cancellation not implemented yet' } });
 });
 
-app.delete('/orders/:orderId', (req, res) => {
-    const orderId = parseInt(req.params.orderId);
 
-    if (!fakeOrdersDb[orderId]) {
-        return res.status(404).json({error: 'Order not found'});
-    }
-
-    const deletedOrder = fakeOrdersDb[orderId];
-    delete fakeOrdersDb[orderId];
-
-    res.json({message: 'Order deleted', deletedOrder});
-});
-
-// Start server
-app.listen(PORT, () => {
-    console.log(`Orders service running on port ${PORT}`);
+// Запуск сервера и миграций
+app.listen(PORT, '0.0.0.0', async () => {
+  logger.info(`Orders Service запущен на порту ${PORT}`);
+  await runMigrations();
 });

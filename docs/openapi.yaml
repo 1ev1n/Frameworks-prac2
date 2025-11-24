@@ -252,6 +252,20 @@ components:
           type: string
           format: date-time
           readOnly: true
+    UserProfileUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          description: New name for the user
+          example: Jane Doe
+        roles:
+          type: array
+          items:
+            type: string
+            enum: [user, admin]
+          description: New roles for the user (admin only)
+          example: [user, admin]
     ErrorResponse:
       type: object
       properties:

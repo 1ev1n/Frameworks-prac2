@@ -74,6 +74,7 @@ app.post('/v1/orders', authenticateJWT, async (req, res) => {
 
     const { items, totalAmount } = value;
     const userId = req.headers['x-user-id']; // Получаем ID пользователя из заголовка от API Gateway
+    const userRoles = JSON.parse(req.headers['x-user-roles'] || '[]');
 
     if (!userId) {
       logger.warn({ requestId }, 'User ID not found in headers for order creation');
@@ -97,10 +98,37 @@ app.post('/v1/orders', authenticateJWT, async (req, res) => {
   }
 });
 
+// Маршрут получения заказа по ID
+app.get('/v1/orders/:id', authenticateJWT, async (req, res) => {
+  const requestId = req.requestId;
+  try {
+    const { id } = req.params;
+    const userId = req.headers['x-user-id'];
+    const userRoles = JSON.parse(req.headers['x-user-roles'] || '[]');
 
-app.get('/v1/orders/:id', (req, res) => {
-  res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'Order retrieval by ID not implemented yet' } });
+    const order = await db.query('SELECT id, user_id, items, status, total_amount, created_at, updated_at FROM orders WHERE id = $1', [id]);
+
+    if (order.rows.length === 0) {
+      logger.warn({ requestId, orderId: id }, 'Order not found');
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Order not found' } });
+    }
+
+    const fetchedOrder = order.rows[0];
+
+    // Только владелец заказа или администратор могут просматривать заказ
+    if (fetchedOrder.user_id !== userId && !userRoles.includes('admin')) {
+      logger.warn({ requestId, orderId: id, userId, userRoles }, 'Unauthorized access to order');
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Insufficient permissions' } });
+    }
+
+    logger.info({ requestId, orderId: id }, 'Order retrieved successfully');
+    res.status(200).json({ success: true, data: fetchedOrder });
+  } catch (error) {
+    logger.error({ requestId, error: error.message }, 'Error retrieving order by ID');
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
+  }
 });
+
 
 app.get('/v1/orders', (req, res) => {
   res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'Order list retrieval not implemented yet' } });

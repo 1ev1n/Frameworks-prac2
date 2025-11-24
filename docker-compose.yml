@@ -22,6 +22,21 @@ services:
     networks:
       - app-network
 
+  db:
+    image: postgres:13
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-task_management_db}
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+
 networks:
   app-network:
     driver: bridge
+
+volumes:
+  db_data:

@@ -230,8 +230,51 @@ app.put('/v1/orders/:id/status', authenticateJWT, async (req, res) => {
   }
 });
 
-app.delete('/v1/orders/:id', (req, res) => {
-  res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'Order cancellation not implemented yet' } });
+// Маршрут отмены заказа
+app.delete('/v1/orders/:id', authenticateJWT, async (req, res) => {
+  const requestId = req.requestId;
+  try {
+    const { id } = req.params;
+    const userId = req.headers['x-user-id'];
+    const userRoles = JSON.parse(req.headers['x-user-roles'] || '[]');
+
+    const order = await db.query('SELECT user_id, status FROM orders WHERE id = $1', [id]);
+
+    if (order.rows.length === 0) {
+      logger.warn({ requestId, orderId: id }, 'Order not found for cancellation');
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Order not found' } });
+    }
+
+    const fetchedOrder = order.rows[0];
+
+    // Только администратор или владелец заказа могут удалить заказ
+    if (fetchedOrder.user_id !== userId && !userRoles.includes('admin')) {
+      logger.warn({ requestId, orderId: id, userId, userRoles }, 'Unauthorized access to cancel order');
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Insufficient permissions' } });
+    }
+
+    // Заказ можно отменить, только если он не в статусе 'completed'
+    if (fetchedOrder.status === 'completed') {
+      logger.warn({ requestId, orderId: id, currentStatus: fetchedOrder.status }, 'Cannot cancel a completed order');
+      return res.status(400).json({ success: false, error: { code: 'INVALID_STATUS', message: 'Cannot cancel a completed order' } });
+    }
+
+    const deletedOrder = await db.query(
+      'DELETE FROM orders WHERE id = $1 RETURNING id',
+      [id]
+    );
+
+    if (deletedOrder.rows.length === 0) {
+      logger.warn({ requestId, orderId: id }, 'Order not found during deletion attempt');
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Order not found for deletion' } });
+    }
+
+    logger.info({ requestId, orderId: id }, 'Order cancelled successfully');
+    res.status(200).json({ success: true, data: { id: deletedOrder.rows[0].id, status: 'cancelled' } });
+  } catch (error) {
+    logger.error({ requestId, error: error.message }, 'Error cancelling order');
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
+  }
 });
 
 

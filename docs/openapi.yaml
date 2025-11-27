@@ -17,3 +17,48 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  schemas:
+    UserRegister:
+      type: object
+      required:
+        - email
+        - password
+        - name
+      properties:
+        email:
+          type: string
+          format: email
+          description: User's email address
+          example: user@example.com
+        password:
+          type: string
+          format: password
+          description: User's password (min 6 characters)
+          example: P@ssw0rd!
+        name:
+          type: string
+          description: User's full name
+          example: John Doe
+        roles:
+          type: array
+          items:
+            type: string
+            enum: [user, admin]
+          default: [user]
+          description: Array of user roles
+    UserLogin:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          description: User's email address
+          example: user@example.com
+        password:
+          type: string
+          format: password
+          description: User's password
+          example: P@ssw0rd!

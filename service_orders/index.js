@@ -34,6 +34,11 @@ const createOrderSchema = Joi.object({
   totalAmount: Joi.number().positive().required(),
 });
 
+// Схема валидации для обновления статуса заказа
+const updateOrderStatusSchema = Joi.object({
+  status: Joi.string().valid('created', 'in_progress', 'completed', 'cancelled').required(),
+});
+
 
 // Запуск миграций при старте сервиса
 async function runMigrations() {
@@ -173,8 +178,56 @@ app.get('/v1/orders', authenticateJWT, async (req, res) => {
   }
 });
 
-app.put('/v1/orders/:id/status', (req, res) => {
-  res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'Order status update not implemented yet' } });
+// Маршрут обновления статуса заказа
+app.put('/v1/orders/:id/status', authenticateJWT, async (req, res) => {
+  const requestId = req.requestId;
+  try {
+    const { id } = req.params;
+    const { error, value } = updateOrderStatusSchema.validate(req.body);
+    if (error) {
+      logger.error({ requestId, error: error.details[0].message }, 'Validation error for order status update');
+      return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: error.details[0].message } });
+    }
+    const { status } = value;
+
+    const userId = req.headers['x-user-id'];
+    const userRoles = JSON.parse(req.headers['x-user-roles'] || '[]');
+
+    const order = await db.query('SELECT user_id, status FROM orders WHERE id = $1', [id]);
+
+    if (order.rows.length === 0) {
+      logger.warn({ requestId, orderId: id }, 'Order not found for status update');
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Order not found' } });
+    }
+
+    const fetchedOrder = order.rows[0];
+
+    // Только администратор может менять статус любого заказа
+    // Владелец заказа может отменить свой заказ, если он в статусе 'created' или 'in_progress'
+    if (!userRoles.includes('admin')) {
+      if (fetchedOrder.user_id !== userId) {
+        logger.warn({ requestId, orderId: id, userId, userRoles }, 'Unauthorized access to update order status');
+        return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Insufficient permissions' } });
+      }
+      if (status === 'cancelled' && (fetchedOrder.status === 'created' || fetchedOrder.status === 'in_progress')) {
+        // Владелец может отменить свой заказ
+      } else if (status !== 'cancelled') {
+        logger.warn({ requestId, orderId: id, userId, userRoles, newStatus: status }, 'User tried to change status to something other than cancelled without admin privileges');
+        return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Only admin can change order status to this value' } });
+      }
+    }
+
+    const updatedOrder = await db.query(
+      'UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, user_id, items, status, total_amount, created_at, updated_at',
+      [status, id]
+    );
+
+    logger.info({ requestId, orderId: id, newStatus: status }, 'Order status updated successfully');
+    res.status(200).json({ success: true, data: updatedOrder.rows[0] });
+  } catch (error) {
+    logger.error({ requestId, error: error.message }, 'Error updating order status');
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
+  }
 });
 
 app.delete('/v1/orders/:id', (req, res) => {

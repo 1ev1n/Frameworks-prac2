@@ -393,6 +393,77 @@ components:
           type: integer
           description: Items per page
           example: 10
+    OrderItem:
+      type: object
+      required:
+        - product
+        - quantity
+      properties:
+        product:
+          type: string
+          description: Name of the product
+          example: Concrete Bag
+        quantity:
+          type: integer
+          minimum: 1
+          description: Quantity of the product
+          example: 5
+    CreateOrder:
+      type: object
+      required:
+        - items
+        - totalAmount
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+          description: List of items in the order
+        totalAmount:
+          type: number
+          format: float
+          minimum: 0.01
+          description: Total amount of the order
+          example: 150.75
+    OrderResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: a1b2c3d4-e5f6-7890-1234-567890abcdef
+        userId:
+          type: string
+          format: uuid
+          example: d290f1ee-6c54-4b01-90e6-d701748f0851
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        status:
+          type: string
+          enum: [created, in_progress, completed, cancelled]
+          example: created
+        totalAmount:
+          type: number
+          format: float
+          example: 150.75
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    UpdateOrderStatus:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [created, in_progress, completed, cancelled]
+          description: New status of the order
+          example: in_progress
     ErrorResponse:
       type: object
       properties:

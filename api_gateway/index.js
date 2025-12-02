@@ -4,6 +4,7 @@ const rateLimit = require('express-rate-limit');
 const { v4: uuidv4 } = require('uuid');
 const pino = require('pino');
 const cors = require('cors');
+const jwt = require('jsonwebtoken'); // Добавляем jsonwebtoken
 
 const app = express();
 const PORT = process.env.PORT || 8000;
@@ -30,7 +31,7 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// JWT Authentication middleware (placeholder for now)
+// JWT Authentication middleware
 const authenticateJWT = (req, res, next) => {
   // For simplicity, allow /v1/register and /v1/login to bypass JWT check at Gateway
   if (req.path === '/v1/register' || req.path === '/v1/login') {
@@ -38,15 +39,22 @@ const authenticateJWT = (req, res, next) => {
   }
 
   const authHeader = req.headers.authorization;
+  const JWT_SECRET = process.env.JWT_SECRET || 'supersecretjwtkey';
+
   if (authHeader) {
     const token = authHeader.split(' ')[1];
-    // In a real scenario, you'd verify the token here
-    // For now, we'll just pass it through or simulate success
-    // For now, we'll just mock the user based on the presence of a token
-    req.user = { id: 'mock-user-id', roles: ['user'] }; // Mock user
-    req.headers['x-user-id'] = req.user.id;
-    req.headers['x-user-roles'] = JSON.stringify(req.user.roles);
-    next();
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+      if (err) {
+        logger.warn({ requestId: req.requestId, error: err.message }, 'JWT verification failed');
+        return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Invalid or expired token' } });
+      }
+      req.user = user; // Прикрепляем декодированную информацию о пользователе
+      // Передаем информацию о пользователе в нижестоящие сервисы
+      req.headers['x-user-id'] = user.id;
+      req.headers['x-user-roles'] = JSON.stringify(user.roles);
+      next();
+    });
   } else {
     logger.warn({ requestId: req.requestId }, 'Authentication failed: No token provided');
     res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Authentication token required' } });

@@ -34,6 +34,11 @@ const registerSchema = Joi.object({
   roles: Joi.array().items(Joi.string().valid('user', 'admin')).default(['user']),
 });
 
+const loginSchema = Joi.object({
+  email: Joi.string().email().required(),
+  password: Joi.string().required(),
+});
+
 // Запуск миграций при старте сервиса
 async function runMigrations() {
   try {
@@ -91,9 +96,44 @@ app.post('/v1/register', async (req, res) => {
   }
 });
 
-// TODO: Реализовать остальные маршруты
-app.post('/v1/login', (req, res) => {
-  res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'Login not implemented yet' } });
+// Маршрут входа
+app.post('/v1/login', async (req, res) => {
+  const requestId = req.requestId;
+  try {
+    const { error, value } = loginSchema.validate(req.body);
+    if (error) {
+      logger.error({ requestId, error: error.details[0].message }, 'Validation error');
+      return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: error.details[0].message } });
+    }
+
+    const { email, password } = value;
+
+    const user = await db.query('SELECT id, email, password_hash, name, roles FROM users WHERE email = $1', [email]);
+    if (user.rows.length === 0) {
+      logger.warn({ requestId, email }, 'Authentication failed: User not found');
+      return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Invalid credentials' } });
+    }
+
+    const storedUser = user.rows[0];
+    const passwordMatch = await bcrypt.compare(password, storedUser.password_hash);
+
+    if (!passwordMatch) {
+      logger.warn({ requestId, email }, 'Authentication failed: Incorrect password');
+      return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Invalid credentials' } });
+    }
+
+    const token = jwt.sign(
+      { id: storedUser.id, email: storedUser.email, roles: storedUser.roles },
+      JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    logger.info({ requestId, userId: storedUser.id }, 'User logged in successfully');
+    res.status(200).json({ success: true, data: { token } });
+  } catch (error) {
+    logger.error({ requestId, error: error.message }, 'Error during user login');
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
+  }
 });
 
 app.get('/v1/profile', (req, res) => {

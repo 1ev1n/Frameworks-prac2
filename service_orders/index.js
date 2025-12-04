@@ -4,9 +4,11 @@ const pino = require('pino');
 const { v4: uuidv4 } = require('uuid');
 const Joi = require('joi');
 const db = require('./src/db'); // Подключаем наш модуль для работы с БД
+const { authenticateJWT, authorizeRoles } = require('./middleware/auth'); // Подключаем middleware для аутентификации и авторизации
 
 const app = express();
 const PORT = process.env.PORT || 3002; // Изменен порт для сервиса заказов
+const JWT_SECRET = process.env.JWT_SECRET || 'supersecretjwtkey'; // Используется для JWT в middleware
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 
@@ -22,6 +24,16 @@ app.use((req, res, next) => {
 // CORS и JSON парсер
 app.use(cors());
 app.use(express.json());
+
+// Схема валидации для создания заказа
+const createOrderSchema = Joi.object({
+  items: Joi.array().items(Joi.object({
+    product: Joi.string().required(),
+    quantity: Joi.number().integer().min(1).required(),
+  })).min(1).required(),
+  totalAmount: Joi.number().positive().required(),
+});
+
 
 // Запуск миграций при старте сервиса
 async function runMigrations() {
@@ -50,10 +62,41 @@ app.get('/', (req, res) => {
   res.send('Orders Service is running');
 });
 
-// TODO: Реализовать остальные маршруты
-app.post('/v1/orders', (req, res) => {
-  res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'Order creation not implemented yet' } });
+// Маршрут создания заказа
+app.post('/v1/orders', authenticateJWT, async (req, res) => {
+  const requestId = req.requestId;
+  try {
+    const { error, value } = createOrderSchema.validate(req.body);
+    if (error) {
+      logger.error({ requestId, error: error.details[0].message }, 'Validation error for order creation');
+      return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: error.details[0].message } });
+    }
+
+    const { items, totalAmount } = value;
+    const userId = req.headers['x-user-id']; // Получаем ID пользователя из заголовка от API Gateway
+
+    if (!userId) {
+      logger.warn({ requestId }, 'User ID not found in headers for order creation');
+      return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'User ID not found' } });
+    }
+
+    const id = uuidv4();
+    const createdAt = new Date();
+    const updatedAt = new Date();
+
+    const newOrder = await db.query(
+      'INSERT INTO orders (id, user_id, items, total_amount, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, user_id, items, status, total_amount, created_at, updated_at',
+      [id, userId, JSON.stringify(items), totalAmount, createdAt, updatedAt]
+    );
+
+    logger.info({ requestId, orderId: newOrder.rows[0].id, userId }, 'Order created successfully');
+    res.status(201).json({ success: true, data: newOrder.rows[0] });
+  } catch (error) {
+    logger.error({ requestId, error: error.message }, 'Error creating order');
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
+  }
 });
+
 
 app.get('/v1/orders/:id', (req, res) => {
   res.status(501).json({ success: false, error: { code: 'NOT_IMPLEMENTED', message: 'Order retrieval by ID not implemented yet' } });
